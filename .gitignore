@@ -1,7 +1,7 @@
 *.pyc
 amac
 pyamanda
-output.py
+/output.py
 /*.ama
 build/
 dist/
