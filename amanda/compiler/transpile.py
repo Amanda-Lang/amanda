@@ -167,7 +167,7 @@ class PyGen:
             unreachable("Cannot leave global scope")
         self.depth -= 1
 
-    def compile_block(self, node: ast.Block, stmts: list[str]):
+    def compile_block(self, node: ast.Block):
         # stmts param is a list of stmts
         # node defined here because caller may want
         # to add custom statement to the beginning of
@@ -177,12 +177,6 @@ class PyGen:
         # Newline for header
         self.update_line_info()
         block = StringIO()
-        # Add caller stmts to buffer
-        for stmt in stmts:
-            block.write(f"{indent_level}{stmt}")
-            block.write("\n")
-            self.update_line_info()
-
         for child in node.children:
             self.gen(child)
         self.depth -= 1
@@ -220,48 +214,32 @@ class PyGen:
 
     def gen_functiondecl(self, node):
         name = node.name.lexeme
-        func_def = StringIO()
         func_symbol = self.scope_symtab.resolve(name)
         name = func_symbol.out_id
         params = []
         for param in func_symbol.params.values():
             params.append(param.out_id)
         params = ",".join(params)
-        func_def.write(f"def {name}({params}):\n")
+        self.writeln_py(f"def {name}({params}):\n", indent=True)
         self.func_depth += 1
-        func_def.write(
-            self.get_func_block(node.block),
-        )
+        self.gen_func_block(node.block)
         self.func_depth -= 1
-        return self.build_str(func_def)
+        return self.writeln_py("")
 
-    def gen_classdecl(self, node):
-        name = node.name.lexeme
-        class_def = StringIO()
-        klass = self.scope_symtab.resolve(name)
-        name = klass.out_id
-        # name of base class for user defined types
-        base_class = "_BaseClass_"
-        class_def.write(f"class {name}(_BaseClass_):\n")
-        self.class_depth += 1
-        class_def.write(self.compile_block(node.body, []))
-        self.class_depth -= 1
-        return self.build_str(class_def)
-
-    def get_func_block(self, block):
+    def gen_func_block(self, block):
         # Add global and nonlocal statements
         # to beginning of a function
         stmts = []
         scope = block.symbols
-        if self.func_depth >= 1:
-            global_stmt = self.gen_global_stmt()
-            if global_stmt:
-                stmts.append(global_stmt)
+        global_stmt = self.get_global_stmt()
+        if global_stmt:
+            self.writeln_py(f"{global_stmt}", indent=True)
+
         if self.func_depth > 1:
-            non_local = self.gen_nonlocal_stmt(scope)
+            non_local = self.get_nonlocal_stmt(scope)
             if non_local:
-                stmts.append(non_local)
-        return self.compile_block(block, stmts)
+                self.writeln_py(f"{non_local}", indent=True)
+        return self.compile_block(block)
 
     def get_names(self, scope, include_funcs=False):
         names = []
@@ -275,8 +253,7 @@ class PyGen:
 
         return names
 
-    # TODO: Fix unecessary forward global declarations
-    def gen_global_stmt(self):
+    def get_global_stmt(self):
         """Adds global statements to
         the beginning of a function"""
         names = self.get_names(self.program_symtab)
@@ -285,7 +262,7 @@ class PyGen:
         names = ",".join(names)
         return f"global {names}"
 
-    def gen_nonlocal_stmt(self, scope):
+    def get_nonlocal_stmt(self, scope):
         """Adds nonlocal statements to
         the beginning of a function"""
         names = []
@@ -298,12 +275,16 @@ class PyGen:
         names = ",".join(names)
         return f"nonlocal {names}"
 
-    def gen_listliteral(self, node):
+    def gen_listliteral(self, node: ast.ListLiteral):
+        if not node.elements:
+            return
         elements = ",".join(
             [str(self.gen(element)) for element in node.elements]
         )
-        list_type = node.eval_type.get_type()
-        return f"Lista({list_type},[{elements}])"
+        if node.in_stmt_ctx:
+            self.writeln_py(f"[{elements}]", indent=True)
+        else:
+            self.write_py(f"[{elements}]")
 
     def gen_call(self, node):
         func = node.symbol

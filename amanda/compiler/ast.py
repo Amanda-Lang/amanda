@@ -74,6 +74,11 @@ class ASTNode:
     def of_type(self, ty: PyTy[T]) -> TypeGuard[T]:
         return isinstance(self, ty)
 
+    def in_stmt_ctx(self):
+        return isinstance(self.parent, Block) or isinstance(
+            self.parent, YieldBlock
+        )
+
 
 class Block(ASTNode):
     def __init__(self, children: list[ASTNode] | None = None):
