@@ -8,10 +8,11 @@ from os import path
 from amanda.compiler.symbols.core import Module
 from amanda.compiler.error import AmandaError, handle_exception, throw_error
 from amanda.compiler.parse import parse
-from amanda.compiler.compile import Generator
+from amanda.compiler.transpile import transpile
 from amanda.compiler.check.core import Analyzer
 from amanda.compiler.codegen import ByteGen
 from amanda.libamanda import run_module
+import amanda.runtime
 
 
 def write_file(name, code):
@@ -32,15 +33,10 @@ def run_frontend(filename) -> tuple:
 
 def run_file(args):
     module, imports = run_frontend(args.file)
-    compiler = ByteGen(module)
-    bin_obj = compiler.compile(imports)
-
+    out = transpile(module, imports)
     if args.debug:
-        write_file("debug.amasm", compiler.make_debug_asm())
-
-    exit_code = run_module(bin_obj)
-    if exit_code != 0:
-        sys.exit(exit_code)
+        write_file("debug.py", out.py_code)
+    amanda.runtime.run(out)
 
 
 def main(*args):

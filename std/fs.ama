@@ -1,0 +1,23 @@
+# Este módulo contém operações com ficheiros
+@@embutido(nome = "fs")
+
+uniao ErroFS
+    FicheiroNaoExiste
+fim
+
+
+uniao ResultadoFS[T]
+    Ok(T), 
+    Erro(ErroFS)
+fim
+
+@embutido
+registo Metadados
+fim
+
+@embutido func leiaf(caminho: texto, codificao: texto): real fim
+@embutido func leia_bytes(caminho: texto): [byte] fim
+@embutido func escrevaf(caminho: texto, conteudo: [byte]): ResultadoFS[int] fim
+@embutido func removaf(caminho: texto): ResultadoFS[int] fim
+@embutido func metadados(caminho: texto): Metadados fim
+@embutido func cria_dir(caminho: texto): ResultadoFS[int] fim

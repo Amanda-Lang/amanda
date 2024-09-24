@@ -56,6 +56,7 @@ class Analyzer(ast.Visitor):
         self.ctx_yield_block: ast.YieldBlock | None = None
         self.in_loop = False
         self.imports = {}
+        self.ctx_imports = {}
         # Module currently being executed
         self.ctx_module: Module = module
         # Scope used primarily to store generic types
@@ -398,6 +399,7 @@ class Analyzer(ast.Visitor):
                 f"Erro ao importar o módulo '{module.fpath}'. Inclusão cíclica detectada"
             )
 
+        self.ctx_module.imports[module.fpath] = module
         prev_module = self.ctx_module
         self.ctx_module = module
         self.imports[module.fpath] = module
@@ -412,6 +414,7 @@ class Analyzer(ast.Visitor):
                 self.define_module_alias(
                     alias, importing_mod=prev_module, imported_mod=module
                 )
+                prev_module.imports[imported_mod.fpath] = imported_mod
 
             case ast.UsaMode.Item:
                 if not usa_items:
@@ -422,6 +425,7 @@ class Analyzer(ast.Visitor):
                     prev_module=prev_module,
                     usa_items=usa_items,
                 )
+                prev_module.imports[imported_mod.fpath] = imported_mod
 
         module.loaded = True
         self.ctx_module = prev_module
