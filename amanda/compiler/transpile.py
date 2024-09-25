@@ -19,6 +19,7 @@ from amanda.compiler.output import (
     Group,
     Indented,
     Lines,
+    NoWSGroup,
     Output,
     Str,
     get_src,
@@ -351,8 +352,11 @@ class PyGen:
         return self.gen_expression(literal, prom_type)
 
     def gen_fmtstr(self, node: ast.FmtStr):
-        raw_str = py_ast.literal_eval(node.token.lexeme)
-        return into_output(f"f'{raw_str}'")
+        fstr = [
+            NoWSGroup([Str("{"), self.gen(part), Str("}")])
+            for part in node.parts
+        ]
+        return NoWSGroup([Str("f'"), *fstr, Str("'")])
 
     def gen_indexget(self, node, gen_get=True):
         target = self.gen(node.target)

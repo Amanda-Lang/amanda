@@ -52,6 +52,17 @@ class Group(Output):
 
 
 @dataclass
+class NoWSGroup(Output):
+    group: list[Output]
+
+    def write(self, buff: StringIO, ctx: OutputCtx):
+        for out in self.group:
+            if not out:
+                continue
+            out.write(buff, ctx)
+
+
+@dataclass
 class Empty(Output):
     def write(self, buff: StringIO, ctx: OutputCtx):
         pass
