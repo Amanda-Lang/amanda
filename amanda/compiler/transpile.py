@@ -1,4 +1,5 @@
 from __future__ import annotations
+import ast as py_ast
 from dataclasses import dataclass
 from os import path
 import sys
@@ -12,6 +13,17 @@ from amanda.compiler.check.exhaustiveness import (
     Decision,
 )
 from amanda.compiler.module import Module
+from amanda.compiler.output import (
+    ArgsList,
+    Empty,
+    Group,
+    Indented,
+    Lines,
+    Output,
+    Str,
+    into_output,
+    line,
+)
 import amanda.compiler.symbols.core as symbols
 from amanda.compiler.symbols.base import Constructor, Symbol
 from amanda.compiler.types.core import (
@@ -82,6 +94,8 @@ class PyGen:
 
         import_strs = []  # self.gen_imports(self.module.imports)
         py_code = self.compile_block(program, import_strs)
+        print("py_code: ", py_code)
+        unreachable("stop!")
         return GenOut(
             self.module,
             py_code,
@@ -146,19 +160,6 @@ class PyGen:
         str_buffer.close()
         return string
 
-    def writeln_to_buff(self, buffer: StringIO, py: str):
-        indent_level = self.INDENT * self.depth
-        buffer.write(f"{indent_level}{py}\n")
-
-    def write_py(self, py: str, indent=False):
-        indent_level = self.INDENT * self.depth if indent else ""
-        self.buffer.write(f"{indent_level}{py}")
-
-    def writeln_py(self, py: str, indent=False):
-        indent_level = self.INDENT * self.depth if indent else ""
-        self.buffer.write(f"{indent_level}{py}\n")
-        self.update_line_info()
-
     def enter_scope(self):
         self.depth += 1
 
@@ -167,28 +168,43 @@ class PyGen:
             unreachable("Cannot leave global scope")
         self.depth -= 1
 
-    def compile_block(self, node: ast.Block):
+    def compile_block(
+        self, node: ast.Block, pre_stmts: list[Output] | None = None
+    ):
         # stmts param is a list of stmts
         # node defined here because caller may want
         # to add custom statement to the beginning of
         # a block
         self.depth += 1
+        depth = self.depth
         self.scope_symtab = node.symbols
         # Newline for header
-        self.update_line_info()
-        block = StringIO()
+        block = []
+        pre_stmts = pre_stmts if pre_stmts else []
+
+        for pre_stmt in pre_stmts:
+            block.append(pre_stmt)
+            block.append(line())
+
         for child in node.children:
-            self.gen(child)
+            block.append(self.gen(child))
+            block.append(line())
+
         self.depth -= 1
         self.scope_symtab = self.scope_symtab.enclosing_scope
+
+        # Add pass statement
+        if len(block) == 0:
+            return Group([Indented(self.depth, Str("pass")), line()])
+
+        return Indented(depth, Group(block))
 
     def gen_vardecl(self, node):
         assign = node.assign
         name = node.name.lexeme
-        symbol = unwrap(self.scope_symtab.resolve(name))
-        self.write_py(f"{symbol.out_id} = ", indent=True)
+        symbol = self.scope_symtab.resolve(name)
         if assign:
-            self.gen(assign.right)
+            value = self.gen(assign.right)
         else:
             # Check for initializer
             init_values = {
@@ -198,8 +214,7 @@ class PyGen:
                 "texto": '''""''',
             }
             value = init_values.get(str(node.var_type))
-            self.write_py(f"{value}")
-        self.writeln_py("")
+        return (Group([into_output([f"{symbol.out_id} =", value])]),)
 
     def gen_uniao(self, node: ast.Uniao):
         name = node.name.lexeme
@@ -214,32 +229,39 @@ class PyGen:
 
     def gen_functiondecl(self, node):
         name = node.name.lexeme
-        func_symbol = self.scope_symtab.resolve(name)
+        func_symbol = cast(
+            symbols.FunctionSymbol, unwrap(self.scope_symtab.resolve(name))
+        )
         name = func_symbol.out_id
         params = []
         for param in func_symbol.params.values():
             params.append(param.out_id)
         params = ",".join(params)
-        self.writeln_py(f"def {name}({params}):\n", indent=True)
         self.func_depth += 1
-        self.gen_func_block(node.block)
+        func_block = self.get_func_block(node.block)
         self.func_depth -= 1
-        return self.writeln_py("")
+        return into_output(
+            [
+                f"def {name}({params}):",
+                "\n",
+                func_block,
+            ]
+        )
 
-    def gen_func_block(self, block):
+    def get_func_block(self, block):
         # Add global and nonlocal statements
         # to beginning of a function
         stmts = []
         scope = block.symbols
-        global_stmt = self.get_global_stmt()
-        if global_stmt:
-            self.writeln_py(f"{global_stmt}", indent=True)
-
+        if self.func_depth >= 1:
+            global_stmt = self.gen_global_stmt()
+            if global_stmt:
+                stmts.append(global_stmt)
         if self.func_depth > 1:
-            non_local = self.get_nonlocal_stmt(scope)
+            non_local = self.gen_nonlocal_stmt(scope)
             if non_local:
-                self.writeln_py(f"{non_local}", indent=True)
-        return self.compile_block(block)
+                stmts.append(non_local)
+        return self.compile_block(block, stmts)
 
     def get_names(self, scope, include_funcs=False):
         names = []
@@ -253,16 +275,17 @@ class PyGen:
 
         return names
 
-    def get_global_stmt(self):
+    # TODO: Fix unecessary forward global declarations
+    def gen_global_stmt(self):
         """Adds global statements to
         the beginning of a function"""
         names = self.get_names(self.program_symtab)
         if len(names) == 0:
             return None
         names = ",".join(names)
-        return f"global {names}"
+        return into_output([f"global {names}"])
 
-    def get_nonlocal_stmt(self, scope):
+    def gen_nonlocal_stmt(self, scope):
         """Adds nonlocal statements to
         the beginning of a function"""
         names = []
@@ -273,42 +296,38 @@ class PyGen:
         if len(names) == 0:
             return None
         names = ",".join(names)
-        return f"nonlocal {names}"
+        return into_output([f"nonlocal {names}"])
 
-    def gen_listliteral(self, node: ast.ListLiteral):
-        if not node.elements:
-            return
+    def gen_listliteral(self, node):
         elements = ",".join(
             [str(self.gen(element)) for element in node.elements]
         )
-        if node.in_stmt_ctx:
-            self.writeln_py(f"[{elements}]", indent=True)
-        else:
-            self.write_py(f"[{elements}]")
+        list_type = node.eval_type.get_type()
+        return into_output(f"ama_rt.lista('{list_type}',[{elements}])")
 
     def gen_call(self, node):
         func = node.symbol
         args = ",".join([str(self.gen(arg)) for arg in node.fargs])
         callee = self.gen(node.callee)
         if isinstance(func, Variant):
-            return f"ama_rt.build_variant({callee}, {args})"
+            return into_output([f"ama_rt.build_variant(", callee, f", {args})"])
         elif func.is_type():
             unreachable("Have not yet implemented calling types!!!")
         func_call = f"{callee}({args})"
         return self.gen_expression(func_call, node.prom_type)
 
-    def gen_alvo(self, node):
-        return "eu"
+    def gen_alvo(self, node: ast.Alvo):
+        return into_output("eu")
 
     def gen_set(self, node):
         target = self.gen(node.target)
         expr = self.gen(node.expr)
-        return f"{target} = {expr}"
+        return into_output([target, "=", expr])
 
     def gen_index(self, node):
         target = self.gen(node.target)
         index = self.gen(node.index)
-        index_expr = f"{target}[{index}]"
+        index_expr = into_output(f"{target}[{index}]")
         return self.gen_expression(index_expr, node.prom_type)
 
     def gen_get(self, node):
@@ -316,31 +335,32 @@ class PyGen:
         member = node.member.lexeme
         klass = node.target.eval_type
         member_sym = klass.members.get(member)
-        get_expr = f"{target}.{member_sym.out_id}"
+        get_expr = into_output(f"{target}.{member_sym.out_id}")
         return self.gen_expression(get_expr, node.prom_type)
 
     def gen_assign(self, node):
         lhs = self.gen(node.left)
         rhs = self.gen(node.right)
-        return f"{lhs} = {rhs}"
+        return into_output([lhs, "=", rhs])
 
     def gen_constant(self, node):
         prom_type = node.prom_type
-        literal = str(node.token.lexeme)
+        literal = into_output(str(node.token.lexeme))
         return self.gen_expression(literal, prom_type)
 
-    def gen_fmtstr(self, node):
-        return "".join([self.gen(part) for part in node.parts])
+    def gen_fmtstr(self, node: ast.FmtStr):
+        raw_str = py_ast.literal_eval(node.token.lexeme)
+        return into_output(f"f'{raw_str}'")
 
     def gen_indexget(self, node, gen_get=True):
         target = self.gen(node.target)
         index = self.gen(node.index)
-        return f"{target}[{index}]"
+        return into_output(f"{target}[{index}]")
 
     def gen_indexset(self, node):
         index_get = self.gen_indexget(node.index, gen_get=False)
         new_val = self.gen(node.value)
-        return f"{index_get} = {new_val}"
+        return into_output([index_get, "=", new_val])
 
     def load_variable(self, symbol: Symbol) -> str:
         name = symbol.out_id
@@ -359,10 +379,10 @@ class PyGen:
         # TODO: Make sure that every identifier goes through
         # 'visit_variable' so that symbol attribute can be set
         if symbol is None:
-            symbol = self.scope_symtab.resolve(name)
+            symbol = unwrap(self.scope_symtab.resolve(name))
         expr = self.load_variable(symbol)
         prom_type = node.prom_type
-        return self.gen_expression(expr, prom_type)
+        return self.gen_expression(into_output(expr), prom_type)
 
     def gen_binop(self, node):
         lhs = self.gen(node.left)
@@ -372,7 +392,7 @@ class PyGen:
             operator = "and"
         elif operator == "ou":
             operator = "or"
-        binop = f"({lhs} {operator} {rhs})"
+        binop = into_output(["(", lhs, operator, rhs, ")"])
         # Promote node
         return self.gen_expression(binop, node.prom_type)
 
@@ -381,7 +401,7 @@ class PyGen:
         operand = self.gen(node.operand)
         if operator == "nao":
             operator = "not"
-        unaryop = f"({operator} {operand})"
+        unaryop = into_output(["(", operator, operand, ")"])
         return self.gen_expression(unaryop, node.prom_type)
 
     def gen_converta(self, node: ast.Converta):
@@ -390,67 +410,70 @@ class PyGen:
         # Converting to same type, can ignore this
         # TODO: Do this in sem analysis
         if new_t == target_t or new_t == Builtins.Indef:
-            return ""
+            return into_output("")
         expr = self.gen(node.target)
         ty = self.load_variable(new_t)
-        return f"ama_rt.converta({expr}, {ty})"
+        return into_output(["ama_rt.converta(", expr, ", ", ty, ")"])
 
-    def gen_expression(self, expression, prom_type: Type):
+    def gen_expression(self, expression: Output, prom_type: Type):
         match prom_type:
             case Primitive(tag=tag) if tag == Types.TREAL:
-                return f"float({expression})"
+                return into_output(["float(", expression, ")"])
             case _:
                 return expression
 
     def gen_senaose(self, node):
-        senaose_stmt = StringIO()
         condition = self.gen(node.condition)
         then_branch = self.compile_branch(node.then_branch)
-        indent_level = self.INDENT * self.depth
-        senaose_stmt.write(f"{indent_level}elif {condition}:\n{then_branch}")
-        return self.build_str(senaose_stmt)
+        return into_output(["elif", condition, ":", line(), then_branch])
 
-    def gen_se(self, node):
-        if_stmt = StringIO()
+    def gen_se(self, node: ast.Se):
         condition = self.gen(node.condition)
-        then_branch = self.compile_branch(node.then_branch)
-        elsif_branches = "".join(
-            [self.gen(branch) for branch in node.elsif_branches]
+        elsif_branches = (
+            into_output([self.gen(branch) for branch in node.elsif_branches])
+            if node.elsif_branches
+            else Empty()
         )
-        if_stmt.write(f"if {condition}:\n{then_branch}")
-        if_stmt.write(f"{elsif_branches}")
-        if node.else_branch:
-            indent_level = self.INDENT * self.depth
-            else_branch = self.compile_branch(node.else_branch)
-            if_stmt.write(f"\n{indent_level}else:\n{else_branch}")
-        return self.build_str(if_stmt)
+        else_branch = (
+            into_output(
+                [
+                    "else: ",
+                    line(),
+                    self.compile_branch(node.else_branch),
+                ]
+            )
+            if node.else_branch
+            else Empty()
+        )
+
+        return into_output(
+            [
+                "if",
+                condition,
+                line(),
+                self.compile_branch(node.then_branch),
+                elsif_branches,
+                else_branch,
+            ]
+        )
 
     def compile_branch(self, block):
         scope = block.symbols
         branch = self.compile_block(block, [])
         names = self.get_names(scope, include_funcs=True)
         if len(names) > 0:
-            self.update_line_info()
             names = ",".join(names)
-            indent_level = self.INDENT * (self.depth + 1)
-            branch += f"{indent_level}del {names}"
+            block = cast(Group, cast(Indented, branch).inner)
+            block.group.append(into_output([f"del {names}", line()]))
         return branch
 
     def gen_enquanto(self, node):
         condition = self.gen(node.condition)
         body = self.compile_branch(node.statement)
-        return f"while {condition}:\n{body}"
+        return into_output(["while", condition, line(), body])
 
     def gen_module(self, node: ast.Module):
         return self.compile_block(node, [])
-
-    def gen_iguala(self, node: ast.Iguala):
-
-        buff = StringIO()
-        self.gen_iguala_from_ir(node, node.ir.tree, buff)
-        # print(buff.getvalue())
-        self.prepend_buffer = buff
-        return self.escolha_ret_var
 
     def gen_path(self, node: ast.Path):
         symbol = node.symbol
@@ -461,26 +484,30 @@ class PyGen:
                 tag = self.uniao_variants[symbol.variant_id()]
                 if not symbol.is_callable():
                     # No args means we can generate the code for creating the variant here
-                    return f"ama_rt.build_variant({tag})"
+                    return into_output(f"ama_rt.build_variant({tag})")
                 else:
-                    return f"{tag}"
+                    return into_output(tag)
             case _:
                 raise NotImplementedError("Cannot generate code for symbol")
 
+    def gen_iguala(self, node: ast.Iguala):
+        buff = StringIO()
+        iguala = self.gen_iguala_from_ir(node, node.ir.tree)
+        self.prepend_buffer = buff
+        return self.escolha_ret_var
+
     def gen_iguala_from_ir(
-        self, node: ast.Iguala, decision: Decision, buff: StringIO
-    ):
+        self, node: ast.Iguala, decision: Decision
+    ) -> Output:
         match decision:
             case DSuccess(body):
                 bindings = []
                 for name, variable in body.bindings:
-                    var = self.load_variable(variable)
                     source = unwrap(unwrap(body.value.symbols).resolve(name))
-                    bindings.append(f"{name} = {source.out_id}")
-                body = self.compile_block(body.value, bindings)
-                buff.write(f"{body}\n")
+                    bindings.append(into_output(f"{name} = {source.out_id}"))
+                return self.compile_block(body.value, bindings)
             case DSwitch(variable=var, cases=cases):
-                self.gen_iguala_cases(node, var, cases, buff)
+                return self.gen_iguala_cases(node, var, cases)
             case _:
                 unreachable("Invalid decision node")
 
@@ -490,79 +517,72 @@ class PyGen:
         test_var = self.load_variable(var)
         match constructor:
             case IntCons(val) | StrCons(val):
-                return f"{test_var} ==  {val}"
+                return into_output(f"{test_var} ==  {val}")
             case VariantCons(tag=tag, uniao=uniao):
                 variant = uniao.variant_by_tag(tag)
                 # TODO: Fix this please!!!
                 idx = self.uniao_variants[variant.variant_id()]
-                return f"{idx} == {test_var}.tag"
+                return into_output(f"{idx} == {test_var}.tag")
             case _:
                 unreachable("Unknown constructor")
 
     def gen_iguala_case_bindings(
-        self, var: symbols.VariableSymbol, case: Case, buff: StringIO
-    ):
+        self, var: symbols.VariableSymbol, case: Case
+    ) -> Output:
         self.load_variable(var)
         variant = var.out_id
         match case.constructor:
             case VariantCons(name=name):
                 cargs = case.arguments
                 if not cargs:
-                    return ""
+                    return Empty()
                 for i, arg in enumerate(cargs):
-                    self.writeln_to_buff(
-                        buff, f"{arg.out_id} = {variant}.args[{i}]"
-                    )
+                    return into_output(f"{arg.out_id} = {variant}.args[{i}]")
             case _:
-                return ""
+                return Empty()
+        return Empty()
 
     def gen_iguala_cases(
-        self,
-        node: ast.Iguala,
-        var: symbols.VariableSymbol,
-        cases: list[Case],
-        buff: StringIO,
-    ):
+        self, node: ast.Iguala, var: symbols.VariableSymbol, cases: list[Case]
+    ) -> Output:
         case = cases[0]
         test = self.gen_iguala_test(var, case.constructor)
         print("depth: ", self.depth)
-        self.writeln_to_buff(buff, f"if {test}:")
         self.enter_scope()
-        self.gen_iguala_case_bindings(var, case, buff)
+        iguala = into_output(
+            [
+                f"if {test}:",
+                line(),
+                Indented(
+                    self.depth,
+                    Group(
+                        [
+                            self.gen_iguala_case_bindings(var, case),
+                            self.gen_iguala_from_ir(node, case.body),
+                        ]
+                    ),
+                ),
+            ]
+        )
         self.leave_scope()
-        self.gen_iguala_from_ir(node, case.body, buff)
-
         for case in cases[1:]:
-            test = self.gen_iguala_test(var, case.constructor)
-            self.writeln_to_buff(buff, f"elif {test}:")
             self.enter_scope()
-            self.gen_iguala_case_bindings(var, case, buff)
+            into_output(
+                [
+                    f"elif {test}:",
+                    line(),
+                    Indented(
+                        self.depth,
+                        Group(
+                            [
+                                self.gen_iguala_case_bindings(var, case),
+                                self.gen_iguala_from_ir(node, case.body),
+                            ]
+                        ),
+                    ),
+                ]
+            )
             self.leave_scope()
-            self.gen_iguala_from_ir(node, case.body, buff)
-
-    def gen_escolha(self, node):
-        switch = StringIO()
-        expr = self.gen(node.expression)
-        cases = node.cases
-        default = node.default_case
-        indent = self.INDENT * self.depth
-        # No need to generate code
-        if not len(cases) and not default:
-            return ""
-        for c, case in enumerate(cases):
-            value = self.gen(case.expression)
-            block = self.compile_block(case.block, [])
-            if c == 0:
-                switch.write(f"if {expr} == {value}:\n{block}")
-            else:
-                switch.write(f"{indent}elif {expr} == {value}:\n{block}")
-        if default:
-            block = self.compile_block(default, [])
-            if not len(cases):
-                switch.write(f"if True:\n{block}")
-            else:
-                switch.write(f"{indent}else:\n{block}")
-        return self.build_str(switch)
 
     def gen_para(self, node):
         scope = node.statement.symbols
@@ -571,7 +591,16 @@ class PyGen:
         control_var = scope.resolve(para_expr.name.lexeme)
         body = self.compile_branch(node.statement)
         expression = self.gen_paraexpr(para_expr, control_var)
-        return f"for {expression}:\n{body}"
+        return into_output(
+            [
+                "for",
+                expression,
+                Empty(),
+                ":",
+                line(),
+                body,
+            ]
+        )
 
     def gen_paraexpr(self, node, control_var):
         range_expr = node.range_expr
@@ -581,30 +610,33 @@ class PyGen:
         inc = f"-1 if {start} > {stop} else 1"
         if range_expr.inc:
             inc = self.gen(range_expr.inc)
-        return f"{name} in range({start},{stop},{inc})"
+        return into_output(
+            [
+                f"{name} in range(",
+                ArgsList([start, stop, into_output(inc)]),
+                ")",
+            ]
+        )
 
     def gen_retorna(self, node):
         expression = self.gen(node.exp) if node.exp else "None"
-        return f"return {expression}"
+        return into_output(["return", expression])
 
     def gen_produz(self, node: ast.Produz):
         if not node.exp or node.exp.eval_type in (
             Builtins.Unknown,
             Builtins.Vazio,
         ):
-            return ""
+            return Empty()
         expression = self.gen(node.exp)
-        return f"{self.escolha_ret_var} = {expression}"
+        return into_output([f"{self.escolha_ret_var}", expression])
 
-    def gen_mostra(self, node):
-        expression = self.gen(node.exp)
-        if node.exp.eval_type.otype == Types.TVAZIO:
-            expression = "vazio"
-        return f"printc({expression})"
+    def gen_mostra(self, node: ast.Mostra):
+        unreachable("Mostra statement has been deprecated !!!")
 
     def gen_loopctlstmt(self, node):
         token = node.token
-        return "break" if token.token == TT.QUEBRA else "continue"
+        return into_output("break" if token.token == TT.QUEBRA else "continue")
 
 
 def transpile(module: Module, imports: dict[str, Module]) -> GenOut:
