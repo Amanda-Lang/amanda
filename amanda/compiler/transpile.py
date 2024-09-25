@@ -21,6 +21,7 @@ from amanda.compiler.output import (
     Lines,
     Output,
     Str,
+    get_src,
     into_output,
     line,
 )
@@ -93,7 +94,7 @@ class PyGen:
             mod.compiled = True
 
         import_strs = []  # self.gen_imports(self.module.imports)
-        py_code = self.compile_block(program, import_strs)
+        py_code = get_src(self.compile_block(program, import_strs))
         print("py_code: ", py_code)
         unreachable("stop!")
         return GenOut(
@@ -107,7 +108,7 @@ class PyGen:
         import_strs = []
         for mod in imports.values():
             mod_name = mod.get_pymodule_name()
-            import_strs.append(f"import {mod_name}")
+            import_strs.append(into_output(f"import {mod_name}"))
         return import_strs
 
     def get_module_name(self, fpath: str):
@@ -183,6 +184,7 @@ class PyGen:
         pre_stmts = pre_stmts if pre_stmts else []
 
         for pre_stmt in pre_stmts:
+            assert pre_stmt
             block.append(pre_stmt)
             block.append(line())
 
@@ -214,7 +216,7 @@ class PyGen:
                 "texto": '''""''',
             }
             value = init_values.get(str(node.var_type))
-        return (Group([into_output([f"{symbol.out_id} =", value])]),)
+        return Group([into_output([f"{symbol.out_id} =", value])])
 
     def gen_uniao(self, node: ast.Uniao):
         name = node.name.lexeme
@@ -314,7 +316,7 @@ class PyGen:
         elif func.is_type():
             unreachable("Have not yet implemented calling types!!!")
         func_call = f"{callee}({args})"
-        return self.gen_expression(func_call, node.prom_type)
+        return self.gen_expression(into_output(func_call), node.prom_type)
 
     def gen_alvo(self, node: ast.Alvo):
         return into_output("eu")
@@ -494,7 +496,7 @@ class PyGen:
         buff = StringIO()
         iguala = self.gen_iguala_from_ir(node, node.ir.tree)
         self.prepend_buffer = buff
-        return self.escolha_ret_var
+        return into_output(self.escolha_ret_var)
 
     def gen_iguala_from_ir(
         self, node: ast.Iguala, decision: Decision
@@ -529,7 +531,6 @@ class PyGen:
     def gen_iguala_case_bindings(
         self, var: symbols.VariableSymbol, case: Case
     ) -> Output:
-        self.load_variable(var)
         variant = var.out_id
         match case.constructor:
             case VariantCons(name=name):
