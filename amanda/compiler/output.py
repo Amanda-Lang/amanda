@@ -28,10 +28,10 @@ class Str(Output):
     value: str
 
     def write(self, buff: StringIO, ctx: OutputCtx):
-        if ctx.is_line_start:
+        if ctx.is_line_start and ctx.depth > 0:
             buff.write(indent_spacing(ctx.depth))
             ctx.is_line_start = False
-        buff.write(self.value)
+        buff.write(self.value.strip())
 
     def __str__(self):
         return self.value
@@ -46,7 +46,7 @@ class Group(Output):
             if not out:
                 continue
             out.write(buff, ctx)
-            if isinstance(out, Empty):
+            if isinstance(out, Empty) or isinstance(out, Lines):
                 continue
             buff.write(" ")
 
@@ -89,8 +89,10 @@ class Indented(Output):
 
     def write(self, buff: StringIO, ctx: OutputCtx):
         old_depth = ctx.depth
-        ctx.depth = self.level
+        ctx.depth += 1
+        print("ctx_depth: ", self.level, "old_depth: ", ctx.depth)
         self.inner.write(buff, ctx)
+        ctx.depth -= 1
         ctx.depth = old_depth
 
 
@@ -124,5 +126,5 @@ def line() -> Lines:
 
 def get_src(output: Output) -> str:
     buff = StringIO()
-    output.write(buff, OutputCtx(0, True))
+    output.write(buff, OutputCtx(-1, True))
     return buff.getvalue()

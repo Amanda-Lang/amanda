@@ -1,9 +1,6 @@
 from __future__ import annotations
-import ast as py_ast
 from dataclasses import dataclass
 from os import path
-import sys
-import pdb
 from typing import cast
 from io import StringIO
 from amanda.compiler.check.exhaustiveness import (
@@ -18,7 +15,6 @@ from amanda.compiler.output import (
     Empty,
     Group,
     Indented,
-    Lines,
     NoWSGroup,
     Output,
     Str,
@@ -43,6 +39,7 @@ from amanda.compiler.tokens import TokenType as TT
 from amanda.compiler.error import AmandaError, throw_error
 from amanda.compiler.types.builtins import Builtins
 from utils.tycheck import unreachable, unwrap
+import pprint
 
 
 @dataclass
@@ -94,10 +91,11 @@ class PyGen:
             compiled_imports.append(module_out)
             mod.compiled = True
 
-        import_strs = []  # self.gen_imports(self.module.imports)
-        py_code = get_src(self.compile_block(program, import_strs))
-        print("py_code: ", py_code)
-        unreachable("stop!")
+        import_strs = []
+        out = self.compile_block(program, import_strs)
+        pprint.pprint(out)
+        # print("Root depth: ", out.level)
+        py_code = get_src(out)
         return GenOut(
             self.module,
             py_code,
@@ -456,6 +454,8 @@ class PyGen:
             [
                 "if",
                 condition,
+                Empty(),
+                ":",
                 line(),
                 self.compile_branch(node.then_branch),
                 elsif_branches,
@@ -476,10 +476,7 @@ class PyGen:
     def gen_enquanto(self, node):
         condition = self.gen(node.condition)
         body = self.compile_branch(node.statement)
-        return into_output(["while", condition, line(), body])
-
-    def gen_module(self, node: ast.Module):
-        return self.compile_block(node, [])
+        return into_output(["while", condition, Empty(), ":", line(), body])
 
     def gen_path(self, node: ast.Path):
         symbol = node.symbol
@@ -554,25 +551,23 @@ class PyGen:
         test = self.gen_iguala_test(var, case.constructor)
         print("depth: ", self.depth)
         self.enter_scope()
-        iguala = into_output(
-            [
-                f"if {test}:",
-                line(),
-                Indented(
-                    self.depth,
-                    Group(
-                        [
-                            self.gen_iguala_case_bindings(var, case),
-                            self.gen_iguala_from_ir(node, case.body),
-                        ]
-                    ),
+        iguala = [
+            f"if {test}:",
+            line(),
+            Indented(
+                self.depth,
+                Group(
+                    [
+                        self.gen_iguala_case_bindings(var, case),
+                        self.gen_iguala_from_ir(node, case.body),
+                    ]
                 ),
-            ]
-        )
+            ),
+        ]
         self.leave_scope()
         for case in cases[1:]:
             self.enter_scope()
-            into_output(
+            iguala.extend(
                 [
                     f"elif {test}:",
                     line(),
@@ -588,6 +583,7 @@ class PyGen:
                 ]
             )
             self.leave_scope()
+        return into_output(iguala)
 
     def gen_para(self, node):
         scope = node.statement.symbols
