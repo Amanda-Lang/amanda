@@ -6,12 +6,19 @@ from amanda.config import STD_LIB
 def run(module: GenOut):
     bytecode = compile(module.py_code, "<string>", "exec")
     imports = resolve_imports(module)
+    declare_builtins(imports)
     exec(bytecode, imports)
 
 
 def read_file(fpath: str):
     with open(fpath, "r", encoding="utf8") as f:
         return f.read()
+
+
+def declare_builtins(imports: dict):
+    # verdadeiro e falso
+    imports["verdadeiro"] = True
+    imports["falso"] = False
 
 
 def resolve_imports(out: GenOut):

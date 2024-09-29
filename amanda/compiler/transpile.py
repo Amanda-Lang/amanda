@@ -15,7 +15,6 @@ from amanda.compiler.output import (
     Empty,
     Group,
     Indented,
-    NoWSGroup,
     Output,
     Str,
     get_src,
@@ -39,7 +38,6 @@ from amanda.compiler.tokens import TokenType as TT
 from amanda.compiler.error import AmandaError, throw_error
 from amanda.compiler.types.builtins import Builtins
 from utils.tycheck import unreachable, unwrap
-import pprint
 
 
 @dataclass
@@ -64,7 +62,7 @@ class PyGen:
         self.uniao_variants: dict[str, int] = {}
         self.ctx_module: Module = module
         self.src_map = {}  # Maps py_fileno to ama_fileno
-        self.escolha_ret_var: str = "_re0_"
+        self.ctx_yield_var: Symbol | None = None
         self.modules = {}
         self.module = module
         self.prepend_buffer: StringIO | None = None
@@ -93,8 +91,6 @@ class PyGen:
 
         import_strs = []
         out = self.compile_block(program, import_strs)
-        pprint.pprint(out)
-        # print("Root depth: ", out.level)
         py_code = get_src(out)
         return GenOut(
             self.module,
@@ -199,6 +195,11 @@ class PyGen:
             return Group([Indented(self.depth, Str("pass")), line()])
 
         return Indented(depth, Group(block))
+
+    def gen_inlineblock(self, node: ast.InlineBlock):
+        return Group(
+            [Group([self.gen(child), line()]) for child in node.children]
+        )
 
     def gen_vardecl(self, node):
         assign = node.assign
@@ -308,13 +309,16 @@ class PyGen:
 
     def gen_call(self, node):
         func = node.symbol
-        args = ",".join([str(self.gen(arg)) for arg in node.fargs])
+        args = [self.gen(arg) for arg in node.fargs]
         callee = self.gen(node.callee)
         if isinstance(func, Variant):
-            return into_output([f"ama_rt.build_variant(", callee, f", {args})"])
+            return into_output(
+                [f"ama_rt.build_variant(", ArgsList([callee, *args]), ")"],
+                ws=False,
+            )
         elif func.is_type():
             unreachable("Have not yet implemented calling types!!!")
-        func_call = f"{callee}({args})"
+        func_call = [callee, "(", ArgsList(args), ")"]
         return self.gen_expression(into_output(func_call), node.prom_type)
 
     def gen_alvo(self, node: ast.Alvo):
@@ -350,11 +354,22 @@ class PyGen:
         return self.gen_expression(literal, prom_type)
 
     def gen_fmtstr(self, node: ast.FmtStr):
-        fstr = [
-            NoWSGroup([Str("{"), self.gen(part), Str("}")])
-            for part in node.parts
-        ]
-        return NoWSGroup([Str("f'"), *fstr, Str("'")])
+        fstr = []
+        for part in node.parts:
+            match part:
+                case ast.Constant():
+                    out = cast(Str, self.gen(part))
+                    out.ws = False
+                    fstr.append(out)
+                case _:
+                    fstr.append(
+                        into_output(
+                            [Str("{", False), self.gen(part), Str("}", False)],
+                            ws=False,
+                        )
+                    )
+
+        return into_output([Str("f'", False), *fstr, Str("'", False)], ws=False)
 
     def gen_indexget(self, node, gen_get=True):
         target = self.gen(node.target)
@@ -386,7 +401,7 @@ class PyGen:
             symbol = unwrap(self.scope_symtab.resolve(name))
         expr = self.load_variable(symbol)
         prom_type = node.prom_type
-        return self.gen_expression(into_output(expr), prom_type)
+        return self.gen_expression(into_output(expr, False), prom_type)
 
     def gen_binop(self, node):
         lhs = self.gen(node.left)
@@ -487,17 +502,20 @@ class PyGen:
                 tag = self.uniao_variants[symbol.variant_id()]
                 if not symbol.is_callable():
                     # No args means we can generate the code for creating the variant here
-                    return into_output(f"ama_rt.build_variant({tag})")
+                    return into_output(
+                        [f"ama_rt.build_variant(", Empty(), tag, Empty(), ")"]
+                    )
                 else:
                     return into_output(tag)
             case _:
                 raise NotImplementedError("Cannot generate code for symbol")
 
     def gen_iguala(self, node: ast.Iguala):
-        buff = StringIO()
-        iguala = self.gen_iguala_from_ir(node, node.ir.tree)
-        self.prepend_buffer = buff
-        return into_output(self.escolha_ret_var)
+        old_yield_var = self.ctx_yield_var
+        self.ctx_yield_var = node.yield_var
+        out = self.gen_iguala_from_ir(node, node.ir.tree)
+        self.ctx_yield_var = old_yield_var
+        return out
 
     def gen_iguala_from_ir(
         self, node: ast.Iguala, decision: Decision
@@ -506,11 +524,28 @@ class PyGen:
             case DSuccess(body):
                 bindings = []
                 for name, variable in body.bindings:
+                    print("Block: ", body.value.symbols)
                     source = unwrap(unwrap(body.value.symbols).resolve(name))
-                    bindings.append(into_output(f"{name} = {source.out_id}"))
+                    bindings.append(
+                        into_output(
+                            f"{source.out_id} = {variable.out_id} # Binding"
+                        )
+                    )
                 return self.compile_block(body.value, bindings)
-            case DSwitch(variable=var, cases=cases):
-                return self.gen_iguala_cases(node, var, cases)
+            case DSwitch(variable=var, cases=cases, fallback=fallback):
+                cases = self.gen_iguala_cases(node, var, cases)
+                return (
+                    cases
+                    if not fallback
+                    else into_output(
+                        [
+                            cases,
+                            "else:",
+                            line(),
+                            self.gen_iguala_from_ir(node, fallback),
+                        ]
+                    )
+                )
             case _:
                 unreachable("Invalid decision node")
 
@@ -520,12 +555,13 @@ class PyGen:
         test_var = self.load_variable(var)
         match constructor:
             case IntCons(val) | StrCons(val):
+                print("Iguala test: ", f"{val}")
                 return into_output(f"{test_var} ==  {val}")
             case VariantCons(tag=tag, uniao=uniao):
                 variant = uniao.variant_by_tag(tag)
                 # TODO: Fix this please!!!
                 idx = self.uniao_variants[variant.variant_id()]
-                return into_output(f"{idx} == {test_var}.tag")
+                return into_output(f"{test_var}['tag'] == {idx}")
             case _:
                 unreachable("Unknown constructor")
 
@@ -533,56 +569,55 @@ class PyGen:
         self, var: symbols.VariableSymbol, case: Case
     ) -> Output:
         variant = var.out_id
+        bindings = []
         match case.constructor:
             case VariantCons(name=name):
                 cargs = case.arguments
                 if not cargs:
-                    return Empty()
-                for i, arg in enumerate(cargs):
-                    return into_output(f"{arg.out_id} = {variant}.args[{i}]")
+                    bindings.append(Empty())
+                else:
+                    for i, arg in enumerate(cargs):
+                        bindings.append(
+                            into_output(
+                                [f"{arg.out_id} = {variant}.args[{i}]", line()]
+                            ),
+                        )
             case _:
-                return Empty()
-        return Empty()
+                bindings.append(Empty())
+        return Group(bindings)
 
     def gen_iguala_cases(
         self, node: ast.Iguala, var: symbols.VariableSymbol, cases: list[Case]
     ) -> Output:
         case = cases[0]
         test = self.gen_iguala_test(var, case.constructor)
-        print("depth: ", self.depth)
-        self.enter_scope()
         iguala = [
-            f"if {test}:",
+            f"if",
+            test,
+            Empty(),
+            ":",
             line(),
             Indented(
                 self.depth,
-                Group(
-                    [
-                        self.gen_iguala_case_bindings(var, case),
-                        self.gen_iguala_from_ir(node, case.body),
-                    ]
-                ),
+                self.gen_iguala_case_bindings(var, case),
             ),
+            self.gen_iguala_from_ir(node, case.body),
         ]
-        self.leave_scope()
         for case in cases[1:]:
-            self.enter_scope()
             iguala.extend(
                 [
-                    f"elif {test}:",
+                    f"elif",
+                    self.gen_iguala_test(var, case.constructor),
+                    Empty(),
+                    ":",
                     line(),
                     Indented(
                         self.depth,
-                        Group(
-                            [
-                                self.gen_iguala_case_bindings(var, case),
-                                self.gen_iguala_from_ir(node, case.body),
-                            ]
-                        ),
+                        self.gen_iguala_case_bindings(var, case),
                     ),
+                    self.gen_iguala_from_ir(node, case.body),
                 ]
             )
-            self.leave_scope()
         return into_output(iguala)
 
     def gen_para(self, node):
@@ -624,13 +659,15 @@ class PyGen:
         return into_output(["return", expression])
 
     def gen_produz(self, node: ast.Produz):
+        exp_or_stmt = self.gen(node.exp)
         if not node.exp or node.exp.eval_type in (
             Builtins.Unknown,
             Builtins.Vazio,
         ):
-            return Empty()
-        expression = self.gen(node.exp)
-        return into_output([f"{self.escolha_ret_var}", expression])
+            return exp_or_stmt
+        return into_output(
+            [f"{unwrap(self.ctx_yield_var).out_id} =", exp_or_stmt]
+        )
 
     def gen_mostra(self, node: ast.Mostra):
         unreachable("Mostra statement has been deprecated !!!")

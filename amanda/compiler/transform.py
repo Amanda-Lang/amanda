@@ -6,11 +6,14 @@ from amanda.compiler.tokens import TokenType as TT, Token
 from amanda.compiler.symbols.core import (
     FunctionSymbol,
     MethodSym,
+    Scope,
     VariableSymbol,
 )
 from amanda.compiler.types.builtins import Builtins, SrcBuiltins
 
 from typing import cast, Callable
+
+from utils.tycheck import unwrap
 
 
 def var_node(name: str, tok: Token) -> ast.Variable:
@@ -181,10 +184,48 @@ class ASTTransformer:
                 else node
             )
 
+    def transform_iguala(self, node: ast.Iguala):
+        self.transform(node.target)
+        for arm in node.arms:
+            self.transform(arm)
+
+        if node.in_stmt_ctx():
+            return node
+        if (
+            node.eval_type == Builtins.Vazio
+            or node.eval_type == Builtins.Unknown
+        ):
+            return node
+        # Get first non-expression parent
+        father = unwrap(node.parent)
+        parent = father
+        while not parent.in_stmt_ctx():
+            parent = unwrap(parent.parent)
+        temp_var = self.get_enclosing_scope(father).new_unique_var(
+            node.eval_type, self.module
+        )
+        var = var_node(temp_var.name, node.token)
+
+        pivot = unwrap(parent.parent)
+        pivot.for_each_child(
+            self.replace_child(
+                pivot, parent, ast.InlineBlock(node.token, [node, parent])
+            )
+        )
+        node.yield_var = temp_var
+        return var
+
+    def get_enclosing_scope(self, node: ast.ASTNode) -> Scope:
+        nearest_block = unwrap(node.parent)
+        while not nearest_block.of_type(
+            ast.Block
+        ) and not nearest_block.of_type(ast.YieldBlock):
+            nearest_block = unwrap(nearest_block.parent)
+        return nearest_block.symbols
+
     def transform_module(self, node: ast.Module) -> ast.Module:
         for child in node.children:
             self.transform(child)
-
         return node
 
 

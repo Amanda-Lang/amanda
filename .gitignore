@@ -13,3 +13,4 @@ run
 /*.amasm
 /*.amac
 /amanda/vm/target
+/debug.py

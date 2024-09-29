@@ -91,6 +91,12 @@ class Block(ASTNode):
 
 
 @dataclass
+class InlineBlock(ASTNode):
+    token: Token
+    children: list[ASTNode]
+
+
+@dataclass
 class Module(Block):
     annotations: list[Annotation]
 
@@ -356,6 +362,7 @@ class Iguala(Expr):
     arms: list[IgualaArm]
     target_binding: symbols.VariableSymbol | None = None
     ir: Any = None
+    yield_var: Any = None
 
     def __init__(self, token: Token, target: Expr, arms: list[IgualaArm]):
         super().__init__(token)

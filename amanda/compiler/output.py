@@ -26,12 +26,15 @@ indent_spacing = lambda n: INDENT * n
 @dataclass
 class Str(Output):
     value: str
+    ws: bool = True
 
     def write(self, buff: StringIO, ctx: OutputCtx):
         if ctx.is_line_start and ctx.depth > 0:
             buff.write(indent_spacing(ctx.depth))
             ctx.is_line_start = False
         buff.write(self.value.strip())
+        if self.ws:
+            buff.write(" ")
 
     def __str__(self):
         return self.value
@@ -39,20 +42,6 @@ class Str(Output):
 
 @dataclass
 class Group(Output):
-    group: list[Output]
-
-    def write(self, buff: StringIO, ctx: OutputCtx):
-        for out in self.group:
-            if not out:
-                continue
-            out.write(buff, ctx)
-            if isinstance(out, Empty) or isinstance(out, Lines):
-                continue
-            buff.write(" ")
-
-
-@dataclass
-class NoWSGroup(Output):
     group: list[Output]
 
     def write(self, buff: StringIO, ctx: OutputCtx):
@@ -73,12 +62,14 @@ class ArgsList(Output):
     elements: list[Output]
 
     def write(self, buff: StringIO, ctx: OutputCtx):
+        if len(self.elements) == 0:
+            return
         last = id(self.elements[-1])
         for out in self.elements:
             if not out:
                 continue
             out.write(buff, ctx)
-            if out != last:
+            if id(out) != last:
                 buff.write(", ")
 
 
@@ -90,7 +81,6 @@ class Indented(Output):
     def write(self, buff: StringIO, ctx: OutputCtx):
         old_depth = ctx.depth
         ctx.depth += 1
-        print("ctx_depth: ", self.level, "old_depth: ", ctx.depth)
         self.inner.write(buff, ctx)
         ctx.depth -= 1
         ctx.depth = old_depth
@@ -105,17 +95,17 @@ class Lines(Output):
         ctx.is_line_start = True
 
 
-def into_output(obj) -> Output:
+def into_output(obj, ws: bool = True) -> Output:
     match obj:
         case str() | int() | float():
             if obj == "\n":
                 return Lines(1)
             else:
-                return Str(str(obj))
+                return Str(str(obj), ws)
         case Output():
             return obj
         case list(objects):
-            return Group([into_output(o) for o in objects])
+            return Group([into_output(o, ws) for o in objects])
         case _:
             unreachable("Invalid object")
 
