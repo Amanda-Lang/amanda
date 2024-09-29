@@ -34,4 +34,4 @@ escrevaln(r1.respostas_compostas())
 escrevaln(r2.respostas_compostas())
 escrevaln(r2.e_sim())
 escrevaln(Resposta::Sim.e_sim())
-#[output]: [a, b] [because yes!] falso verdadeiro
+#[output]: ['a', 'b'] ['because yes!'] falso verdadeiro

@@ -23,4 +23,4 @@ r2: Resposta = Resposta::Justificada("because yes!")
 
 escrevaln(r1.respostas_compostas())
 escrevaln(r2.respostas_compostas())
-#[output]: [a, b] [because yes!]
+#[output]: ['a', 'b'] ['because yes!']

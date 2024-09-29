@@ -3,3 +3,7 @@ usa 'mat'
 met int::exp(alvo, exp: int): int
     retorna expoente(alvo, exp):>int
 fim
+
+met texto::contem(alvo, outro: texto): bool
+    retorna verdadeiro
+fim

@@ -139,13 +139,7 @@ class PyGen:
         return self.compile_block(node, [])
 
     def gen_usa(self, node: ast.Usa):
-        module = node.items
-        generator = PyGen(module)
-        mod_src, _ = generator.generate_code(
-            module,
-        )
-        self.py_lineno += generator.py_lineno
-        return mod_src
+        return Empty()
 
     def update_line_info(self):
         self.src_map[self.py_lineno] = self.ama_lineno
@@ -229,7 +223,7 @@ class PyGen:
             variant.variant_id(), len(self.uniao_variants)
         )
 
-    def gen_functiondecl(self, node):
+    def gen_functiondecl(self, node: ast.FunctionDecl | ast.MethodDecl):
         name = node.name.lexeme
         func_symbol = cast(
             symbols.FunctionSymbol, unwrap(self.scope_symtab.resolve(name))
@@ -255,10 +249,6 @@ class PyGen:
         # to beginning of a function
         stmts = []
         scope = block.symbols
-        if self.func_depth >= 1:
-            global_stmt = self.gen_global_stmt()
-            if global_stmt:
-                stmts.append(global_stmt)
         if self.func_depth > 1:
             non_local = self.gen_nonlocal_stmt(scope)
             if non_local:
@@ -301,11 +291,8 @@ class PyGen:
         return into_output([f"nonlocal {names}"])
 
     def gen_listliteral(self, node):
-        elements = ",".join(
-            [str(self.gen(element)) for element in node.elements]
-        )
-        list_type = node.eval_type.get_type()
-        return into_output(f"ama_rt.lista('{list_type}',[{elements}])")
+        elements = [self.gen(element) for element in node.elements]
+        return into_output(["[", ArgsList(elements), "]"], False)
 
     def gen_call(self, node):
         func = node.symbol
@@ -313,7 +300,7 @@ class PyGen:
         callee = self.gen(node.callee)
         if isinstance(func, Variant):
             return into_output(
-                [f"{{'tag': ", callee, ", 'args': [", ArgsList(args), "]}"],
+                [f"ama_rt.Variant(", callee, ", [", ArgsList(args), "]", ")"],
                 ws=False,
             )
         elif func.is_type():
@@ -322,7 +309,7 @@ class PyGen:
         return self.gen_expression(into_output(func_call), node.prom_type)
 
     def gen_alvo(self, node: ast.Alvo):
-        return into_output("eu")
+        return into_output(self.load_variable(node.var_symbol))
 
     def gen_set(self, node):
         target = self.gen(node.target)
@@ -345,6 +332,10 @@ class PyGen:
 
     def gen_assign(self, node):
         lhs = self.gen(node.left)
+        var = node.left.symbol
+        if var.is_global:
+            lhs = ["global {var.out_id}", line(), lhs]
+        # TODO: also generate non local
         rhs = self.gen(node.right)
         return into_output([lhs, "=", rhs])
 
@@ -352,6 +343,12 @@ class PyGen:
         prom_type = node.prom_type
         literal = into_output(str(node.token.lexeme))
         return self.gen_expression(literal, prom_type)
+
+    def gen_methoddecl(self, node: ast.MethodDecl):
+        return self.gen_functiondecl(node)
+
+    def gen_noop(self, node: ast.NoOp):
+        return Empty()
 
     def gen_fmtstr(self, node: ast.FmtStr):
         fstr = []
@@ -502,7 +499,7 @@ class PyGen:
                 tag = self.uniao_variants[symbol.variant_id()]
                 if not symbol.is_callable():
                     # No args means we can generate the code for creating the variant here
-                    return into_output([f"{{'tag': ", tag, "}"], False)
+                    return into_output(f"ama_rt.Variant({tag}, [])")
                 else:
                     return into_output(tag)
             case _:
@@ -557,7 +554,7 @@ class PyGen:
                 variant = uniao.variant_by_tag(tag)
                 # TODO: Fix this please!!!
                 idx = self.uniao_variants[variant.variant_id()]
-                return into_output(f"{test_var}['tag'] == {idx}")
+                return into_output(f"{test_var}.tag == {idx}")
             case _:
                 unreachable("Unknown constructor")
 
@@ -576,7 +573,7 @@ class PyGen:
                         bindings.append(
                             into_output(
                                 [
-                                    f"{arg.out_id} = {variant}['args'][{i}]",
+                                    f"{arg.out_id} = {variant}.args[{i}]",
                                     line(),
                                 ]
                             ),
@@ -669,7 +666,11 @@ class PyGen:
         )
 
     def gen_mostra(self, node: ast.Mostra):
-        unreachable("Mostra statement has been deprecated !!!")
+        return (
+            into_output([f"embutidos_ama.escrevaln(", self.gen(node.exp), ")"])
+            if node.exp != None
+            else into_output("embutidos_ama.escrevaln(" ")")
+        )
 
     def gen_loopctlstmt(self, node):
         token = node.token

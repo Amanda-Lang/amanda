@@ -1,3 +1,15 @@
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class Variant:
+    tag: int
+    args: list
+
+    def __str__(self) -> str:
+        return f"<Variante({self.tag})>"
+
+
 def lista(ty, elements):
     return elements
 

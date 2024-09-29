@@ -5,12 +5,20 @@ real = float
 bool = bool
 
 
+def _fmt_object(obj):
+    match obj:
+        case bool():
+            return "verdadeiro" if obj else "falso"
+        case _:
+            return obj
+
+
 def escreva(obj):
-    print(obj, end="")
+    print(_fmt_object(obj), end="")
 
 
 def escrevaln(obj):
-    print(obj, end="\n")
+    print(_fmt_object(obj), end="\n")
 
 
 def leia(prompt: str):
