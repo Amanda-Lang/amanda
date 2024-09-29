@@ -27,6 +27,11 @@ func processar_cmd(cmd: texto)
     buf: texto = ""
     str_tam: int = tam(cmd)
 
+    se tam(cmd) < 3 entao
+        escrevaln(err_msg)
+        retorna
+    fim
+
     #Extrair primeiro operando
     enquanto e_alg(cmd[pos]) e (pos < str_tam) faca
         char = cmd[pos]

@@ -12,7 +12,7 @@ from amanda.compiler.transpile import transpile
 from amanda.compiler.check.core import Analyzer
 from amanda.compiler.codegen import ByteGen
 from amanda.libamanda import run_module
-import amanda.runtime
+import amanda.runtime.py.startup as pyrt
 
 
 def write_file(name, code):
@@ -36,7 +36,7 @@ def run_file(args):
     out = transpile(module, imports)
     if args.debug:
         write_file("debug.py", out.py_code)
-    amanda.runtime.run(out)
+    pyrt.run(out)
 
 
 def main(*args):

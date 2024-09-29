@@ -1,10 +1,12 @@
 import sys, importlib.util
 from amanda.compiler.transpile import GenOut
 from amanda.config import STD_LIB
+import amanda.runtime.py.rtbuiltins as ama_rt
 
 
 def run(module: GenOut):
-    bytecode = compile(module.py_code, "<string>", "exec")
+    mod_name = module.module.get_pymodule_name()
+    bytecode = compile(module.py_code, mod_name, "exec")
     imports = resolve_imports(module)
     declare_builtins(imports)
     exec(bytecode, imports)
@@ -19,6 +21,8 @@ def declare_builtins(imports: dict):
     # verdadeiro e falso
     imports["verdadeiro"] = True
     imports["falso"] = False
+    # Rt builtins
+    imports["ama_rt"] = ama_rt
 
 
 def resolve_imports(out: GenOut):

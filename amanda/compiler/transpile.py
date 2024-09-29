@@ -313,7 +313,7 @@ class PyGen:
         callee = self.gen(node.callee)
         if isinstance(func, Variant):
             return into_output(
-                [f"ama_rt.build_variant(", ArgsList([callee, *args]), ")"],
+                [f"{{'tag': ", callee, ", 'args': [", ArgsList(args), "]}"],
                 ws=False,
             )
         elif func.is_type():
@@ -502,9 +502,7 @@ class PyGen:
                 tag = self.uniao_variants[symbol.variant_id()]
                 if not symbol.is_callable():
                     # No args means we can generate the code for creating the variant here
-                    return into_output(
-                        [f"ama_rt.build_variant(", Empty(), tag, Empty(), ")"]
-                    )
+                    return into_output([f"{{'tag': ", tag, "}"], False)
                 else:
                     return into_output(tag)
             case _:
@@ -524,7 +522,6 @@ class PyGen:
             case DSuccess(body):
                 bindings = []
                 for name, variable in body.bindings:
-                    print("Block: ", body.value.symbols)
                     source = unwrap(unwrap(body.value.symbols).resolve(name))
                     bindings.append(
                         into_output(
@@ -555,7 +552,6 @@ class PyGen:
         test_var = self.load_variable(var)
         match constructor:
             case IntCons(val) | StrCons(val):
-                print("Iguala test: ", f"{val}")
                 return into_output(f"{test_var} ==  {val}")
             case VariantCons(tag=tag, uniao=uniao):
                 variant = uniao.variant_by_tag(tag)
@@ -579,7 +575,10 @@ class PyGen:
                     for i, arg in enumerate(cargs):
                         bindings.append(
                             into_output(
-                                [f"{arg.out_id} = {variant}.args[{i}]", line()]
+                                [
+                                    f"{arg.out_id} = {variant}['args'][{i}]",
+                                    line(),
+                                ]
                             ),
                         )
             case _:

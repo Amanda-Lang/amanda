@@ -763,7 +763,6 @@ class ByteGen:
                 self.gen_iguala_cases(node, var, cases)
             case _:
                 unreachable("Invalid decision node")
-        pass
 
     def gen_iguala_test(
         self, var: symbols.VariableSymbol, constructor: Constructor
