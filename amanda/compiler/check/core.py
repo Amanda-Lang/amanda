@@ -161,7 +161,6 @@ class Analyzer(ast.Visitor):
         return not (
             keyword.iskeyword(name)
             or (name.startswith("_") and name.endswith("_"))
-            or name in globals().get("__builtins__")
         )
 
     # 1.Any functions declared inside another

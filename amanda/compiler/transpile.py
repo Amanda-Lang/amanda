@@ -290,6 +290,9 @@ class PyGen:
         names = ",".join(names)
         return into_output([f"nonlocal {names}"])
 
+    def gen_registo(self, node: ast.Registo):
+        return Empty()
+
     def gen_listliteral(self, node):
         elements = [self.gen(element) for element in node.elements]
         return into_output(["[", ArgsList(elements), "]"], False)
@@ -304,7 +307,10 @@ class PyGen:
                 ws=False,
             )
         elif func.is_type():
-            unreachable("Have not yet implemented calling types!!!")
+            return into_output(
+                [f"ama_rt.Registo(", callee, ", [", ArgsList(args), "]", ")"],
+                ws=False,
+            )
         func_call = [callee, "(", ArgsList(args), ")"]
         return self.gen_expression(into_output(func_call), node.prom_type)
 
