@@ -308,11 +308,14 @@ class PyGen:
             )
         elif func.is_type():
             return into_output(
-                [f"ama_rt.Registo(", callee, ", [", ArgsList(args), "]", ")"],
+                [f"ama_rt.Registo(dict(", ArgsList(args), ")", ")"],
                 ws=False,
             )
         func_call = [callee, "(", ArgsList(args), ")"]
         return self.gen_expression(into_output(func_call), node.prom_type)
+
+    def gen_namedarg(self, node: ast.NamedArg):
+        raise NotImplementedError("boo!!!")
 
     def gen_alvo(self, node: ast.Alvo):
         return into_output(self.load_variable(node.var_symbol))
@@ -336,11 +339,11 @@ class PyGen:
         get_expr = into_output(f"{target}.{member_sym.out_id}")
         return self.gen_expression(get_expr, node.prom_type)
 
-    def gen_assign(self, node):
+    def gen_assign(self, node: ast.Assign):
         lhs = self.gen(node.left)
-        var = node.left.symbol
+        var = node.left.var_symbol
         if var.is_global:
-            lhs = ["global {var.out_id}", line(), lhs]
+            lhs = [f"global {var.out_id}", line(), lhs]
         # TODO: also generate non local
         rhs = self.gen(node.right)
         return into_output([lhs, "=", rhs])

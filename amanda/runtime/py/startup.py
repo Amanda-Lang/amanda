@@ -20,6 +20,7 @@ def declare_builtins(imports: dict):
     # verdadeiro e falso
     imports["verdadeiro"] = True
     imports["falso"] = False
+    imports["nulo"] = None
     # Rt builtins
     imports["ama_rt"] = ama_rt
 

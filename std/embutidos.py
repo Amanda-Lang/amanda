@@ -9,6 +9,8 @@ def _fmt_object(obj):
     match obj:
         case bool():
             return "verdadeiro" if obj else "falso"
+        case None:
+            return "nulo"
         case _:
             return obj
 
